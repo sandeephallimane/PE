@@ -1,51 +1,54 @@
 import streamlit as st
-import pandas as pd
 import pdfplumber
-import tempfile
-import os
+import pandas as pd
+import io
 
-st.set_page_config(page_title="PDF Table to Excel", layout="centered")
+st.set_page_config(page_title="PDF Table Extractor", layout="wide")
 
-st.title("📊 PDF Table → Excel")
-st.caption("Extracts ONLY tables (Streamlit Cloud compatible)")
+st.title("📊 PDF Table Extractor & Previewer")
+st.write("Upload your PDF to view and extract tables into Excel.")
 
-uploaded_file = st.file_uploader("Upload PDF", type=["pdf"])
+uploaded_file = st.file_uploader("Choose a PDF file", type="pdf")
 
-if uploaded_file:
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-        tmp.write(uploaded_file.read())
-        pdf_path = tmp.name
+if uploaded_file is not None:
+    with st.spinner("Processing PDF..."):
+        all_tables = []
+        
+        with pdfplumber.open(uploaded_file) as pdf:
+            for i, page in enumerate(pdf.pages):
+                tables = page.extract_tables()
+                
+                for j, table in enumerate(tables):
+                    # Process the table into a clean DataFrame
+                    df = pd.DataFrame(table)
+                    # Use first row as header and remove it from data
+                    df.columns = df.iloc[0]
+                    df = df[1:].reset_index(drop=True)
+                    
+                    all_tables.append(df)
+                    
+                    # --- DATA PREVIEW SECTION ---
+                    st.subheader(f"Table {len(all_tables)} (Page {i+1})")
+                    st.dataframe(df, use_container_width=True) 
+                    # ----------------------------
 
-    tables = []
-
-    with pdfplumber.open(pdf_path) as pdf:
-        for page in pdf.pages:
-            page_tables = page.extract_tables()
-            for table in page_tables:
-                df = pd.DataFrame(table[1:], columns=table[0])
-                if not df.empty:
-                    tables.append(df)
-
-    if not tables:
-        st.warning("No tables found.")
-    else:
-        st.success(f"✅ {len(tables)} tables extracted")
-
-        for i, df in enumerate(tables, start=1):
-            st.subheader(f"Table {i}")
-            st.dataframe(df)
-
-        excel_path = pdf_path.replace(".pdf", ".xlsx")
-        with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
-            for i, df in enumerate(tables, start=1):
-                df.to_excel(writer, sheet_name=f"Table_{i}", index=False)
-
-        with open(excel_path, "rb") as f:
+        if all_tables:
+            # Create the Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                for idx, table_df in enumerate(all_tables):
+                    table_df.to_excel(writer, sheet_name=f'Table_{idx+1}', index=False)
+            
+            st.divider()
+            st.success(f"Successfully found {len(all_tables)} tables!")
+            
+            # Centered Download Button
             st.download_button(
-                "⬇️ Download Excel",
-                data=f,
-                file_name="tables_only.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                label="📥 Download All Tables as Excel",
+                data=output.getvalue(),
+                file_name="extracted_data.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Click here to download the tables shown above."
             )
-
-    os.remove(pdf_path)
+        else:
+            st.warning("No tables were detected. Ensure the PDF contains structured grid data.")
